@@ -281,7 +281,7 @@
                 .olx-stats-panel {
                     position: fixed !important;
                     bottom: 20px !important;
-                    right: 20px !important;
+                    left: 20px !important;
                     background: #002f34 !important;
                     color: white !important;
                     padding: 15px !important;
