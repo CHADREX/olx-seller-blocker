@@ -16,7 +16,7 @@ Userscript для блокування продавців на OLX.ua з мож�
 ## 📦 Встановлення
 
 1. Встановіть [Tampermonkey](https://www.tampermonkey.net/) або [Violentmonkey](https://violentmonkey.github.io/)
-2. Натисніть [**Встановити скрипт**](https://raw.githubusercontent.com/CHADREX/olx-seller-blocker/main/olx_blocker.user.js)
+2. Натисніть [**Встановити скрипт**](https://raw.githubusercontent.com/YOUR_USERNAME/olx-seller-blocker/main/olx_blocker.user.js)
 3. Підтвердіть встановлення
 4. Оновіть сторінку OLX
 
