@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         OLX Seller Blocker
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Блокировка продавцов на OLX с переключением видимости
+// @version      2.0
+// @description  Блокування продавців на OLX із перемиканням видимості, експортом/імпортом
 // @author       You
 // @match        https://www.olx.ua/*
 // @match        https://olx.ua/*
@@ -19,6 +19,7 @@
         BLOCK_BUTTON_TEXT: '🚫 Заблокувати',
         UNBLOCK_BUTTON_TEXT: '✅ Розблокувати',
         BLOCKED_MESSAGE: '⛔ Заблоковано',
+        HOVER_HIDE_DELAY_MS: 400,  // ← задержка скрытия панели при уходе курсора (мс)
         DEBUG: false
     };
 
@@ -77,6 +78,25 @@
                 ...data
             }));
         }
+
+        exportJSON() {
+            return JSON.stringify(this.blocked, null, 2);
+        }
+
+        importJSON(jsonStr) {
+            const data = JSON.parse(jsonStr);
+            let imported = 0, skipped = 0;
+            Object.entries(data).forEach(([id, info]) => {
+                if (!this.blocked[id]) {
+                    this.blocked[id] = info;
+                    imported++;
+                } else {
+                    skipped++;
+                }
+            });
+            this.save();
+            return { imported, skipped };
+        }
     }
 
     class OLXDataParser {
@@ -130,73 +150,44 @@
                     if (content.includes('window.__PRERENDERED_STATE__')) {
                         try {
                             let match = content.match(/window\.__PRERENDERED_STATE__\s*=\s*"((?:[^"\\]|\\.)*)";/s);
-
                             if (!match) {
                                 match = content.match(/window\.__PRERENDERED_STATE__\s*=\s*"(.+?)"\s*;/s);
                             }
-
                             if (match) {
                                 let jsonStr = match[1];
-                                log('Длина извлечённой строки: ' + jsonStr.length);
-
                                 try {
                                     jsonStr = JSON.parse('"' + jsonStr + '"');
                                 } catch (e) {
-                                    log('⚠ Ошибка при декодировании escape-последовательностей: ' + e.message);
                                     jsonStr = jsonStr.replace(/\\"/g, '"');
                                 }
-
                                 data = JSON.parse(jsonStr);
-                                log('✓ JSON успешно распарсен');
                                 break;
                             }
                         } catch (e) {
-                            log('⚠ Ошибка при декодировании JSON из скрипта: ' + e.message);
                             continue;
                         }
                     }
                 }
 
-                if (!data) {
-                    log('⚠ __PRERENDERED_STATE__ не найден или не удалось распарсить');
-                    log('⚠ Будет использован кеш и fallback методы');
-                    return;
-                }
+                if (!data) return;
 
                 const ads = data?.listing?.listing?.ads || [];
-                log(`✓ Найдено ${ads.length} объявлений в __PRERENDERED_STATE__`);
-
                 let newEntries = 0;
 
                 ads.forEach(ad => {
                     const adId = String(ad.id);
                     const seller = ad.user || {};
-
                     if (seller.id) {
-                        const sellerData = {
-                            id: seller.id,
-                            name: seller.name || 'Без імені',
-                            uuid: seller.uuid
-                        };
-
-                        if (!this.adToSeller.has(adId)) {
-                            newEntries++;
-                        }
-
+                        const sellerData = { id: seller.id, name: seller.name || 'Без імені', uuid: seller.uuid };
+                        if (!this.adToSeller.has(adId)) newEntries++;
                         this.adToSeller.set(adId, sellerData);
                     }
                 });
 
-                if (newEntries > 0) {
-                    log(`✓ Добавлено ${newEntries} новых записей в кеш`);
-                    this.saveCache();
-                }
-
-                log(`✓ Всего в кеше: ${this.adToSeller.size} записей`);
+                if (newEntries > 0) this.saveCache();
 
             } catch (e) {
                 console.error('Ошибка парсинга __PRERENDERED_STATE__:', e);
-                log('⚠ Будет использован кеш и fallback методы');
             }
         }
 
@@ -222,7 +213,6 @@
                     vertical-align: middle !important;
                     z-index: 100 !important;
                 }
-
                 .olx-block-btn {
                     display: inline-block !important;
                     padding: 3px 10px !important;
@@ -264,7 +254,7 @@
                     top: 50% !important;
                     left: 50% !important;
                     transform: translate(-50%, -50%) !important;
-                    background: rgba(0, 0, 0, 0.9) !important;
+                    background: rgba(0,0,0,0.9) !important;
                     color: white !important;
                     padding: 10px 20px !important;
                     border-radius: 8px !important;
@@ -272,113 +262,156 @@
                     font-size: 16px !important;
                     z-index: 10 !important;
                 }
-
-                /* Скрытие заблокированных карточек */
                 body.olx-hide-blocked .olx-blocked-card {
                     display: none !important;
                 }
 
-                .olx-stats-panel {
+                /* --- Floating widget --- */
+                #olx-blocker-widget {
                     position: fixed !important;
                     bottom: 20px !important;
                     left: 20px !important;
-                    background: #002f34 !important;
-                    color: white !important;
-                    padding: 15px !important;
-                    border-radius: 8px !important;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
-                    font-size: 12px !important;
                     z-index: 9999 !important;
-                    max-width: 160px !important;
+                    font-family: sans-serif !important;
+                    font-size: 12px !important;
                 }
-                .olx-stats-panel h4 {
-                    margin: 0 0 10px 0 !important;
-                    font-size: 14px !important;
+                #olx-blocker-icon {
+                    width: 40px !important;
+                    height: 40px !important;
+                    background: #002f34 !important;
+                    border-radius: 50% !important;
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    cursor: pointer !important;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important;
+                    font-size: 18px !important;
+                    transition: transform 0.2s !important;
+                    user-select: none !important;
                 }
-                .olx-stats-panel button {
-                    margin-top: 5px !important;
-                    padding: 5px 10px !important;
+                #olx-blocker-icon:hover {
+                    transform: scale(1.1) !important;
+                }
+                #olx-blocker-badge {
+                    position: absolute !important;
+                    top: -4px !important;
+                    right: -4px !important;
                     background: #ff6b6b !important;
                     color: white !important;
-                    border: none !important;
-                    border-radius: 4px !important;
-                    cursor: pointer !important;
+                    border-radius: 10px !important;
+                    min-width: 18px !important;
+                    height: 18px !important;
+                    font-size: 10px !important;
+                    font-weight: bold !important;
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    padding: 0 4px !important;
+                    box-sizing: border-box !important;
+                }
+                /* Невидимый мост между иконкой и панелью — заполняет зазор */
+                #olx-blocker-widget::after {
+                    content: '' !important;
+                    position: absolute !important;
+                    bottom: 40px !important;
+                    left: 0 !important;
                     width: 100% !important;
+                    height: 12px !important;
+                    background: transparent !important;
                 }
-                .olx-stats-panel button:hover {
-                    background: #ff5252 !important;
+                #olx-blocker-panel {
+                    position: absolute !important;
+                    bottom: 52px !important;
+                    left: 0 !important;
+                    background: #002f34 !important;
+                    color: white !important;
+                    padding: 14px !important;
+                    border-radius: 10px !important;
+                    box-shadow: 0 4px 16px rgba(0,0,0,0.4) !important;
+                    width: 180px !important;
+                    opacity: 0 !important;
+                    pointer-events: none !important;
+                    transform: translateY(6px) !important;
+                    transition: opacity 0.2s, transform 0.2s !important;
                 }
-                .olx-stats-panel button.toggle-btn {
-                    background: #4c6ef5 !important;
+                #olx-blocker-panel.visible,
+                #olx-blocker-panel.pinned {
+                    opacity: 1 !important;
+                    pointer-events: all !important;
+                    transform: translateY(0) !important;
                 }
-                .olx-stats-panel button.toggle-btn:hover {
-                    background: #3b5bdb !important;
+                #olx-blocker-panel h4 {
+                    margin: 0 0 10px 0 !important;
+                    font-size: 13px !important;
+                    display: flex !important;
+                    align-items: center !important;
+                    gap: 6px !important;
                 }
-                .olx-stats-panel button.cache-btn {
-                    background: #868e96 !important;
+                #olx-stats-content {
+                    margin-bottom: 10px !important;
+                    line-height: 1.6 !important;
+                    color: #aed6db !important;
                 }
-                .olx-stats-panel button.cache-btn:hover {
-                    background: #6c757d !important;
+                .olx-panel-btn {
+                    display: block !important;
+                    width: 100% !important;
+                    margin-top: 6px !important;
+                    padding: 6px 10px !important;
+                    border: none !important;
+                    border-radius: 5px !important;
+                    cursor: pointer !important;
+                    font-size: 11px !important;
+                    font-weight: 600 !important;
+                    text-align: center !important;
+                    box-sizing: border-box !important;
+                    transition: filter 0.15s !important;
                 }
+                .olx-panel-btn:hover { filter: brightness(1.15) !important; }
+                .olx-panel-btn.btn-toggle  { background: #4c6ef5 !important; color: white !important; }
+                .olx-panel-btn.btn-manage  { background: #ff6b6b !important; color: white !important; }
+                .olx-panel-btn.btn-export  { background: #51cf66 !important; color: white !important; }
+                .olx-panel-btn.btn-import  { background: #ffd43b !important; color: #333 !important; }
+                .olx-panel-btn.btn-cache   { background: #868e96 !important; color: white !important; }
+
+                #olx-import-input { display: none !important; }
             `;
             document.head.appendChild(style);
-
-            // Применяем сохранённое состояние
             this.loadHideState();
         }
 
         loadHideState() {
             try {
-                const hideBlocked = localStorage.getItem(CONFIG.HIDE_STATE_KEY) === 'true';
-                if (hideBlocked) {
+                if (localStorage.getItem(CONFIG.HIDE_STATE_KEY) === 'true') {
                     document.body.classList.add('olx-hide-blocked');
                 }
-            } catch (e) {
-                log('⚠ Ошибка загрузки состояния: ' + e.message);
-            }
+            } catch (e) {}
         }
 
         toggleHideBlocked() {
             document.body.classList.toggle('olx-hide-blocked');
             const isHidden = document.body.classList.contains('olx-hide-blocked');
-
             try {
                 localStorage.setItem(CONFIG.HIDE_STATE_KEY, isHidden.toString());
-                log(`✓ Заблокированные карточки ${isHidden ? 'скрыты' : 'показаны'}`);
-            } catch (e) {
-                log('⚠ Ошибка сохранения состояния: ' + e.message);
-            }
-
+            } catch (e) {}
             this.updateStatsPanel();
         }
 
         addBlockButton(card) {
             const locationElement = card.querySelector('[data-testid="location-date"]');
-            if (!locationElement) {
-                log(`⚠ Не найден location-date для карточки ${card.id}`);
-                return;
-            }
+            if (!locationElement) return;
 
             const adId = card.id;
-            if (!adId) {
-                log(`⚠ У карточки нет ID`);
-                return;
-            }
+            if (!adId) return;
 
             const parentDiv = locationElement.parentElement;
-            if (parentDiv && parentDiv.querySelector(`[data-olx-blocker-ad="${adId}"]`)) {
-                return;
-            }
+            if (parentDiv && parentDiv.querySelector(`[data-olx-blocker-ad="${adId}"]`)) return;
 
             let seller = this.dataParser.getSellerByAdId(adId);
 
             if (!seller || !seller.id) {
-                log(`⚠ Не удалось найти продавца в __PRERENDERED_STATE__ для ${adId}, попытка через AJAX...`);
-
                 const link = card.querySelector('a[href*="/d/uk/obyavlenie/"]');
                 if (link) {
-                    const adUrl = link.getAttribute('href');
-                    this.addBlockButtonWithAjax(card, adId, adUrl, locationElement);
+                    this.addBlockButtonWithAjax(card, adId, link.getAttribute('href'), locationElement);
                 }
                 return;
             }
@@ -409,18 +442,12 @@
             btnContainer.appendChild(btn);
             locationElement.parentNode.insertBefore(btnContainer, locationElement.nextSibling);
 
-            log(`✓ Добавлена кнопка для ${adId} (${seller.name})${isBlocked ? ' [ЗАБЛОКИРОВАН]' : ''}`);
-
-            if (isBlocked) {
-                this.hideCard(card);
-            }
+            if (isBlocked) this.hideCard(card);
         }
 
         addBlockButtonWithAjax(card, adId, adUrl, locationElement) {
             const parentDiv = locationElement.parentElement;
-            if (parentDiv && parentDiv.querySelector(`[data-olx-blocker-ad="${adId}"]`)) {
-                return;
-            }
+            if (parentDiv && parentDiv.querySelector(`[data-olx-blocker-ad="${adId}"]`)) return;
 
             const btnContainer = document.createElement('span');
             btnContainer.style.marginLeft = '10px';
@@ -436,62 +463,29 @@
             btnContainer.appendChild(btn);
             locationElement.parentNode.insertBefore(btnContainer, locationElement.nextSibling);
 
-            fetch(adUrl, {
-                method: 'GET',
-                headers: {
-                    'Cache-Control': 'no-cache, no-store, must-revalidate',
-                    'Pragma': 'no-cache',
-                    'Expires': '0'
-                },
-                cache: 'no-store'
-            })
-                .then(response => {
-                    log(`AJAX ответ для ${adId}: статус ${response.status}`);
-                    return response.text();
-                })
+            fetch(adUrl, { method: 'GET', cache: 'no-store' })
+                .then(r => r.text())
                 .then(html => {
-                    log(`AJAX HTML для ${adId}: размер ${html.length} байт`);
-
-                    let match = html.match(/"user":\s*\{\s*"id"\s*:\s*(\d+)\s*,\s*"name"\s*:\s*"([^"]+)"/);
-
-                    if (!match) {
-                        log(`Попытка 2: альтернативный формат с экранированием`);
-                        match = html.match(/\\"user\\":\s*\{\s*\\"id\\":\s*(\d+)\s*,\s*\\"name\\":\s*\\"([^"]+)\\"/);
-                    }
+                    let match = html.match(/"user":\s*\{\s*"id"\s*:\s*(\d+)\s*,\s*"name"\s*:\s*"([^"]+)"/)
+                        || html.match(/\\"user\\":\s*\{\s*\\"id\\":\s*(\d+)\s*,\s*\\"name\\":\s*\\"([^"]+)\\"/)
+                        || html.match(/"user":\s*\{\s*"id"\s*:\s*(\d+)[^}]*"name"\s*:\s*"([^"]*?)"/);
 
                     if (!match) {
-                        log(`Попытка 3: поиск в __PRERENDERED_STATE__`);
-                        const stateMatch = html.match(/"user":\s*\{\s*"id"\s*:\s*(\d+)[^}]*"name"\s*:\s*"([^"]*?)"/);
-                        if (stateMatch) {
-                            match = stateMatch;
-                        }
-                    }
-
-                    if (!match) {
-                        log(`Попытка 4: упрощённый поиск только ID`);
-                        const idMatch = html.match(/"userId"\s*:\s*(\d+)|"user_id"\s*:\s*(\d+)|"sellerId"\s*:\s*(\d+)/);
-                        if (idMatch) {
-                            const userId = idMatch[1] || idMatch[2] || idMatch[3];
-                            log(`Найден userId: ${userId}`);
-                            const nameMatch = html.match(/"sellerName"\s*:\s*"([^"]+)"|"userName"\s*:\s*"([^"]+)"/);
-                            if (nameMatch) {
-                                match = [null, userId, nameMatch[1] || nameMatch[2]];
-                            }
+                        const idM = html.match(/"userId"\s*:\s*(\d+)|"user_id"\s*:\s*(\d+)|"sellerId"\s*:\s*(\d+)/);
+                        if (idM) {
+                            const userId = idM[1] || idM[2] || idM[3];
+                            const nameM = html.match(/"sellerName"\s*:\s*"([^"]+)"|"userName"\s*:\s*"([^"]+)"/);
+                            if (nameM) match = [null, userId, nameM[1] || nameM[2]];
                         }
                     }
 
                     if (match) {
                         const seller = {
                             id: parseInt(match[1]),
-                            name: match[2].replace(/\\u[\da-f]{4}/gi, (m) =>
-                                String.fromCharCode(parseInt(m.slice(2), 16))
-                            )
+                            name: match[2].replace(/\\u[\da-f]{4}/gi, m => String.fromCharCode(parseInt(m.slice(2), 16)))
                         };
 
-                        log(`✓ Получен seller через AJAX: ${seller.name} (${seller.id})`);
-
                         this.dataParser.addToCache(adId, seller);
-
                         btnContainer.setAttribute('data-olx-blocker-seller', seller.id);
                         btnContainer.setAttribute('data-olx-blocker-seller-name', seller.name);
 
@@ -502,7 +496,6 @@
                             : `${CONFIG.BLOCK_BUTTON_TEXT}: ${seller.name}`;
                         btn.title = `${seller.name} (ID: ${seller.id})`;
                         btn.style.cursor = 'pointer';
-
                         btn.onclick = null;
                         btn.addEventListener('click', (e) => {
                             e.preventDefault();
@@ -510,17 +503,13 @@
                             this.toggleBlock(adId, seller, btn);
                         });
 
-                        if (isBlocked) {
-                            this.hideCard(card);
-                        }
+                        if (isBlocked) this.hideCard(card);
                     } else {
-                        log(`✗ Не удалось найти seller в HTML для ${adId}`);
                         btn.textContent = '❌ Помилка';
                         btn.style.cursor = 'not-allowed';
                     }
                 })
-                .catch(error => {
-                    log(`✗ Ошибка AJAX для ${adId}: ${error}`);
+                .catch(() => {
                     btn.textContent = '❌ Помилка';
                     btn.style.cursor = 'not-allowed';
                 });
@@ -528,7 +517,6 @@
 
         toggleBlock(adId, seller, btn) {
             const isBlocked = this.blockedSellers.isBlocked(seller.id);
-
             if (isBlocked) {
                 this.blockedSellers.remove(seller.id);
                 this.updateAllSellerButtons(seller.id, false);
@@ -540,149 +528,186 @@
                     this.hideAllCardsFromSeller(seller.id);
                 }
             }
-
             this.updateStatsPanel();
         }
 
         updateAllSellerButtons(sellerId, isBlocked) {
-            const sellerButtons = document.querySelectorAll(`[data-olx-blocker-seller="${sellerId}"]`);
-
-            log(`🔄 Обновление ${sellerButtons.length} кнопок для продавца ${sellerId}`);
-
-            sellerButtons.forEach(container => {
+            document.querySelectorAll(`[data-olx-blocker-seller="${sellerId}"]`).forEach(container => {
                 const btn = container.querySelector('.olx-block-btn');
                 const sellerName = container.getAttribute('data-olx-blocker-seller-name') || 'Автор';
-
                 if (btn) {
-                    if (isBlocked) {
-                        btn.className = 'olx-block-btn blocked';
-                        btn.textContent = `${CONFIG.UNBLOCK_BUTTON_TEXT}: ${sellerName}`;
-                    } else {
-                        btn.className = 'olx-block-btn';
-                        btn.textContent = `${CONFIG.BLOCK_BUTTON_TEXT}: ${sellerName}`;
-                    }
+                    btn.className = 'olx-block-btn' + (isBlocked ? ' blocked' : '');
+                    btn.textContent = isBlocked
+                        ? `${CONFIG.UNBLOCK_BUTTON_TEXT}: ${sellerName}`
+                        : `${CONFIG.BLOCK_BUTTON_TEXT}: ${sellerName}`;
                 }
             });
         }
 
-        hideCard(card) {
-            card.classList.add('olx-blocked-card');
-        }
-
-        showCard(card) {
-            card.classList.remove('olx-blocked-card');
-        }
+        hideCard(card) { card.classList.add('olx-blocked-card'); }
+        showCard(card) { card.classList.remove('olx-blocked-card'); }
 
         hideAllCardsFromSeller(sellerId) {
-            const cards = document.querySelectorAll('[data-cy="l-card"]');
-            cards.forEach(card => {
-                const adId = card.id;
-                const seller = this.dataParser.getSellerByAdId(adId);
-                if (seller && seller.id === sellerId) {
-                    this.hideCard(card);
-                }
+            document.querySelectorAll('[data-cy="l-card"]').forEach(card => {
+                const seller = this.dataParser.getSellerByAdId(card.id);
+                if (seller && seller.id === sellerId) this.hideCard(card);
             });
         }
 
         showAllCardsFromSeller(sellerId) {
-            const cards = document.querySelectorAll('[data-cy="l-card"]');
-            cards.forEach(card => {
-                const adId = card.id;
-                const seller = this.dataParser.getSellerByAdId(adId);
-                if (seller && seller.id === sellerId) {
-                    this.showCard(card);
-                }
+            document.querySelectorAll('[data-cy="l-card"]').forEach(card => {
+                const seller = this.dataParser.getSellerByAdId(card.id);
+                if (seller && seller.id === sellerId) this.showCard(card);
             });
         }
 
         processAllCards() {
-            const cards = document.querySelectorAll('[data-cy="l-card"]');
-            log(`Обработка ${cards.length} карточек объявлений`);
-
-            cards.forEach(card => {
-                this.addBlockButton(card);
-            });
+            document.querySelectorAll('[data-cy="l-card"]').forEach(card => this.addBlockButton(card));
         }
 
+        // ---- Floating widget ----
+
         createStatsPanel() {
-            const panel = document.createElement('div');
-            panel.className = 'olx-stats-panel';
+            const widget = document.createElement('div');
+            widget.id = 'olx-blocker-widget';
 
             const isHidden = document.body.classList.contains('olx-hide-blocked');
-            const toggleText = isHidden ? '👁️ Показати' : '🚫 Сховати';
 
-            panel.innerHTML = `
-                <h4>🚫 OLX Blocker</h4>
-                <div id="olx-stats-content">
-                    Заблоковано: ${this.blockedSellers.getCount()}<br>
-                    Кеш: ${this.dataParser.adToSeller.size} записів
+            widget.innerHTML = `
+                <div id="olx-blocker-panel">
+                    <h4>🚫 OLX Blocker</h4>
+                    <div id="olx-stats-content"></div>
+                    <button class="olx-panel-btn btn-toggle" id="olx-toggle-btn"></button>
+                    <button class="olx-panel-btn btn-manage" id="olx-manage-btn">📋 Керувати списком</button>
+                    <button class="olx-panel-btn btn-export" id="olx-export-btn">⬇️ Експорт JSON</button>
+                    <button class="olx-panel-btn btn-import" id="olx-import-btn">⬆️ Імпорт JSON</button>
+                    <button class="olx-panel-btn btn-cache"  id="olx-cache-btn">🗑️ Очистити кеш</button>
+                    <input type="file" id="olx-import-input" accept=".json">
                 </div>
-                <button id="olx-toggle-visibility-btn" class="toggle-btn">${toggleText} заблокованих</button>
-                <button id="olx-manage-btn">Керувати списком</button>
-                <button id="olx-clear-cache-btn" class="cache-btn">Очистити кеш</button>
+                <div id="olx-blocker-icon">
+                    🚫
+                    <span id="olx-blocker-badge">0</span>
+                </div>
             `;
-            document.body.appendChild(panel);
 
-            document.getElementById('olx-toggle-visibility-btn').addEventListener('click', () => {
-                this.toggleHideBlocked();
+            document.body.appendChild(widget);
+
+            // Hover с задержкой скрытия
+            const panel = document.getElementById('olx-blocker-panel');
+            const icon  = document.getElementById('olx-blocker-icon');
+            let hideTimer = null;
+
+            function showPanel() {
+                clearTimeout(hideTimer);
+                panel.classList.add('visible');
+            }
+            function scheduleHide() {
+                if (panel.classList.contains('pinned')) return;
+                hideTimer = setTimeout(() => {
+                    panel.classList.remove('visible');
+                }, CONFIG.HOVER_HIDE_DELAY_MS);
+            }
+
+            widget.addEventListener('mouseenter', showPanel);
+            widget.addEventListener('mouseleave', scheduleHide);
+
+            // Pin panel on icon click (for touch/mobile)
+            icon.addEventListener('click', () => {
+                panel.classList.toggle('pinned');
+                if (panel.classList.contains('pinned')) {
+                    panel.classList.add('visible');
+                } else {
+                    scheduleHide();
+                }
             });
 
-            document.getElementById('olx-manage-btn').addEventListener('click', () => {
-                this.showManageDialog();
+            document.getElementById('olx-toggle-btn').addEventListener('click', () => this.toggleHideBlocked());
+            document.getElementById('olx-manage-btn').addEventListener('click', () => this.showManageDialog());
+
+            document.getElementById('olx-export-btn').addEventListener('click', () => {
+                const json = this.blockedSellers.exportJSON();
+                const blob = new Blob([json], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `olx_blocked_${new Date().toISOString().slice(0,10)}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
             });
 
-            document.getElementById('olx-clear-cache-btn').addEventListener('click', () => {
-                if (confirm('Очистити кеш маппінгу оголошень? Це не видалить список заблокованих продавців.')) {
+            document.getElementById('olx-import-btn').addEventListener('click', () => {
+                document.getElementById('olx-import-input').click();
+            });
+
+            document.getElementById('olx-import-input').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const result = this.blockedSellers.importJSON(ev.target.result);
+                        alert(`Імпорт завершено!\nДодано: ${result.imported}\nПропущено (вже є): ${result.skipped}`);
+                        this.updateStatsPanel();
+                        this.processAllCards();
+                    } catch (err) {
+                        alert('Помилка імпорту: ' + err.message);
+                    }
+                };
+                reader.readAsText(file);
+                e.target.value = '';
+            });
+
+            document.getElementById('olx-cache-btn').addEventListener('click', () => {
+                if (confirm('Очистити кеш маппінгу оголошень? Список заблокованих збережеться.')) {
                     localStorage.removeItem(this.dataParser.cacheKey);
                     this.dataParser.adToSeller.clear();
                     this.updateStatsPanel();
                     alert('Кеш очищено!');
                 }
             });
+
+            this.updateStatsPanel();
         }
 
         updateStatsPanel() {
+            const count = this.blockedSellers.getCount();
+
+            const badge = document.getElementById('olx-blocker-badge');
+            if (badge) badge.textContent = count;
+
             const content = document.getElementById('olx-stats-content');
             if (content) {
-                content.innerHTML = `Заблоковано: ${this.blockedSellers.getCount()}<br>Кеш: ${this.dataParser.adToSeller.size} записів`;
+                content.innerHTML = `Заблоковано: <b>${count}</b><br>Кеш: ${this.dataParser.adToSeller.size} записів`;
             }
 
-            const toggleBtn = document.getElementById('olx-toggle-visibility-btn');
+            const toggleBtn = document.getElementById('olx-toggle-btn');
             if (toggleBtn) {
                 const isHidden = document.body.classList.contains('olx-hide-blocked');
-                toggleBtn.textContent = isHidden ? '👁️ Показати заблокованих' : '🚫 Сховати заблокованих';
+                toggleBtn.textContent = isHidden ? '👁️ Показати заблокованих' : '🙈 Сховати заблокованих';
             }
         }
 
         showManageDialog() {
             const blocked = this.blockedSellers.list();
-
             if (blocked.length === 0) {
                 alert('Список заблокованих продавців порожній');
                 return;
             }
-
             let message = 'ЗАБЛОКОВАНІ ПРОДАВЦІ:\n\n';
             blocked.forEach((seller, index) => {
                 message += `${index + 1}. ${seller.name} (ID: ${seller.id})\n`;
                 message += `   Заблоковано: ${new Date(seller.blockedAt).toLocaleString('uk-UA')}\n\n`;
             });
-
-            message += '\nДля розблокування натисніть кнопку "Розблокувати" на картці оголошення';
-
+            message += 'Для розблокування натисніть кнопку на картці оголошення';
             alert(message);
         }
     }
 
     function log(message) {
-        if (CONFIG.DEBUG) {
-            console.log(`[OLX Blocker] ${message}`);
-        }
+        if (CONFIG.DEBUG) console.log(`[OLX Blocker] ${message}`);
     }
 
     function init() {
-        log('Инициализация OLX Seller Blocker...');
-
         const blockedSellers = new BlockedSellers();
         const dataParser = new OLXDataParser();
         const uiManager = new UIManager(blockedSellers, dataParser);
@@ -692,60 +717,35 @@
 
         function tryProcessCards() {
             const cards = document.querySelectorAll('[data-cy="l-card"]');
-
             if (cards.length > 0) {
-                log(`✓ Найдено ${cards.length} карточек, начинаю обработку...`);
                 uiManager.processAllCards();
                 return true;
             } else {
                 processAttempts++;
-                if (processAttempts < maxAttempts) {
-                    log(`⏳ Карточки ещё не загружены, попытка ${processAttempts}/${maxAttempts}...`);
-                    setTimeout(tryProcessCards, 500);
-                } else {
-                    log('⚠ Не удалось найти карточки после всех попыток');
-                }
+                if (processAttempts < maxAttempts) setTimeout(tryProcessCards, 500);
                 return false;
             }
         }
 
-        if (!tryProcessCards()) {
-            setTimeout(tryProcessCards, 500);
-        }
-
-        setTimeout(() => {
-            uiManager.createStatsPanel();
-        }, 1000);
+        if (!tryProcessCards()) setTimeout(tryProcessCards, 500);
+        setTimeout(() => uiManager.createStatsPanel(), 1000);
 
         let isProcessing = false;
-
         const observer = new MutationObserver((mutations) => {
             if (isProcessing) return;
-
             let hasNewCards = false;
 
             mutations.forEach((mutation) => {
                 mutation.addedNodes.forEach((node) => {
-                    if (node.nodeType === 1) {
-                        if (node.hasAttribute && node.hasAttribute('data-olx-blocker-ad')) {
-                            return;
-                        }
-
-                        if (node.hasAttribute && node.hasAttribute('data-cy') && node.getAttribute('data-cy') === 'l-card') {
-                            hasNewCards = true;
-                        }
-                        const cards = node.querySelectorAll ? node.querySelectorAll('[data-cy="l-card"]') : [];
-                        if (cards.length > 0) {
-                            hasNewCards = true;
-                        }
-                    }
+                    if (node.nodeType !== 1) return;
+                    if (node.hasAttribute?.('data-olx-blocker-ad')) return;
+                    if (node.getAttribute?.('data-cy') === 'l-card') hasNewCards = true;
+                    if (node.querySelectorAll?.('[data-cy="l-card"]').length > 0) hasNewCards = true;
                 });
             });
 
             if (hasNewCards) {
                 isProcessing = true;
-                log('🔄 Обнаружены новые карточки через MutationObserver');
-
                 setTimeout(() => {
                     uiManager.processAllCards();
                     isProcessing = false;
@@ -753,50 +753,30 @@
             }
         });
 
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
+        observer.observe(document.body, { childList: true, subtree: true });
 
         setInterval(() => {
             const cards = document.querySelectorAll('[data-cy="l-card"]');
             let missingButtons = 0;
-            let hiddenCards = 0;
 
             cards.forEach(card => {
                 const adId = card.id;
                 if (!adId) return;
-
                 const locationElement = card.querySelector('[data-testid="location-date"]');
                 if (!locationElement) return;
-
                 const parentDiv = locationElement.parentElement;
-                const hasButton = parentDiv && parentDiv.querySelector(`[data-olx-blocker-ad="${adId}"]`);
-
-                if (!hasButton) {
+                if (!(parentDiv && parentDiv.querySelector(`[data-olx-blocker-ad="${adId}"]`))) {
                     missingButtons++;
                 } else {
                     const seller = dataParser.getSellerByAdId(adId);
-                    if (seller && blockedSellers.isBlocked(seller.id)) {
-                        if (!card.classList.contains('olx-blocked-card')) {
-                            uiManager.hideCard(card);
-                            hiddenCards++;
-                        }
+                    if (seller && blockedSellers.isBlocked(seller.id) && !card.classList.contains('olx-blocked-card')) {
+                        uiManager.hideCard(card);
                     }
                 }
             });
 
-            if (missingButtons > 0) {
-                log(`🔧 Обнаружено ${missingButtons} карточек без кнопок, восстанавливаю...`);
-                uiManager.processAllCards();
-            }
-
-            if (hiddenCards > 0) {
-                log(`🔧 Скрыто ${hiddenCards} карточек заблокированных продавцов`);
-            }
+            if (missingButtons > 0) uiManager.processAllCards();
         }, 3000);
-
-        log('✓ Инициализация завершена, Observer активен');
     }
 
     if (document.readyState === 'loading') {
